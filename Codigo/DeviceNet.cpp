@@ -1583,18 +1583,18 @@ void DEVICENET::send_dup_mac_response(void)
 {
     // put bytes into CAN chip msg object #7 and send
    // load CAN message config register - msg length = 7
-    pokeb(CAN_BASE, 0x76, 0x78);
+    //pokeb(CAN_BASE, 0x76, 0x78);
 
     // load data area of CAN chip
-    pokeb(CAN_BASE, 0x77, 0x80);			// indicate response message
-    pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
-    pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
-    pokeb(CAN_BASE, 0x7A, (UCHAR)(serial));
-    pokeb(CAN_BASE, 0x7B, (UCHAR)(serial >> 8));
-    pokeb(CAN_BASE, 0x7C, (UCHAR)(serial >> 16));
-    pokeb(CAN_BASE, 0x7D, (UCHAR)(serial >> 24));
+    //pokeb(CAN_BASE, 0x77, 0x80);			// indicate response message
+    //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x7A, (UCHAR)(serial));
+    //pokeb(CAN_BASE, 0x7B, (UCHAR)(serial >> 8));
+    //pokeb(CAN_BASE, 0x7C, (UCHAR)(serial >> 16));
+    //pokeb(CAN_BASE, 0x7D, (UCHAR)(serial >> 24));
 
-    pokeb(CAN_BASE, 0x71, 0x66);      // set msg object #7 transmit request
+    //pokeb(CAN_BASE, 0x71, 0x66);      // set msg object #7 transmit request
 }
 
 
