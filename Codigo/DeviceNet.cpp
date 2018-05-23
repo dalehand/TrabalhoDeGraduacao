@@ -1094,8 +1094,404 @@ int DEVICENET::handle_unconnected_port(UCHAR request[], UCHAR response[])
     return OK;
 }
 
+class IDENTITY
+{
+    private:
+    static UINT class_revision;
+    UINT vendor_id;
+    UINT device_type;
+    UINT product_code;
+    struct
+    {
+        UCHAR major;
+        UCHAR minor;
+    } revision;
+
+    ULONG serial;
+    char product_name[40];
+    ULONG device_clock, dup_mac_clock;
+    CONNECTION *explicitcon, *io_poll;
 
 
+    public:
+    UINT status;
+    UCHAR state;
+    static void handle_class_inquiry(UCHAR*, UCHAR*);
+    void handle_explicit(UCHAR*, UCHAR*);
+    UCHAR get_state(void);
+    void device_self_test(void);
+    void send_dup_mac_check_message(void);
+    void update_device(void);
+    IDENTITY(UINT id, ULONG s, CONNECTION *ex, CONNECTION *io)  // constructor
+    {
+        device_clock = 0;
+        dup_mac_clock = 0;
+        vendor_id = id;
+        serial = s;
+        explicitcon = ex;
+        io_poll = io;
+        device_type = 0;  				// generic device
+        product_code = 1;       		// product model within a device type
+        revision.major = 1;     		// rev level of product model
+        revision.minor = 0;
+        status = 0;             		// status of the device
+        state = 0;                    // state of the device
+        memset(product_name, 0, 40);
+        strcpy(product_name, "MODULO IO");
+    }
+};
+
+
+
+// Handle Explicit requests to class
+void IDENTITY::handle_class_inquiry(UCHAR request[], UCHAR response[])
+{
+    UINT service, attrib, error;
+
+    service = request[1];
+    attrib = request[4];
+    error = 0;
+    memset(response, 0, BUFSIZE);
+
+    switch(service)
+    {
+        case GET_REQUEST:
+        switch(attrib)
+        {
+            case 1:  // get revision attribute
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(class_revision);
+            response[3] = HIBYTE(class_revision);
+            response[LENGTH] = 4;
+            break;
+
+            default:
+            error = ATTRIB_NOT_SUPPORTED;
+            break;
+        }
+        break;
+
+
+        default:
+        error = SERVICE_NOT_SUPPORTED;
+        break;
+    }
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
+}
+
+
+// Handle Explicit requests to Identity Object
+void IDENTITY::handle_explicit(UCHAR request[], UCHAR response[])
+{
+    UINT service, attrib, error;
+    UCHAR reset_type;
+
+    service = request[1];
+    attrib = request[4];
+    error = 0;
+    memset(response, 0, BUFSIZE);
+
+    switch(service)
+    {
+        case GET_REQUEST:
+        switch(attrib)
+        {
+            case 1:  // get ODVA vendor ID
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(vendor_id);
+            response[3] = HIBYTE(vendor_id);
+            response[LENGTH] = 4;
+            break;
+
+            case 2:  // get device type
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(device_type);
+            response[3] = HIBYTE(device_type);
+            response[LENGTH] = 4;
+            break;
+
+            case 3:  // get product code
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(product_code);
+            response[3] = HIBYTE(product_code);
+            response[LENGTH] = 4;
+            break;
+
+            case 4:  // get revision level
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = revision.major;
+            response[3] = revision.minor;
+            response[LENGTH] = 4;
+            break;
+
+            case 5:  // get summary status
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(status);
+            response[3] = HIBYTE(status);
+            response[LENGTH] = 4;
+            break;
+
+            case 6:  // get serial number - 4 byte
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = (UCHAR)(serial);
+            response[3] = (UCHAR)(serial >> 8);
+            response[4] = (UCHAR)(serial >> 16);
+            response[5] = (UCHAR)(serial >> 24);
+            response[LENGTH] = 6;
+            break;
+
+            case 7:  // get product name (short string format)
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = (UCHAR)strlen(product_name);
+            strcpy(&response[3], product_name);
+            response[LENGTH] = response[2] + 3;
+            break;
+
+            case 8:  // get device state
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = state;
+            response[LENGTH] = 3;
+            break;
+
+
+            default:
+            error = ATTRIB_NOT_SUPPORTED;
+            break;
+        }
+        break;
+
+
+        case RESET_REQUEST:
+      // If reset type is not specified, default to type zero
+        if (request[LENGTH] == 4) reset_type = 0;
+        else reset_type = request[4];
+
+        if (reset_type == 0)    		// simulate off/on cycle
+        {
+            // return success response now, can't do it after reset
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[LENGTH] = 2;
+            global_event |= FULL_RESET;      // set reset bit
+        }
+        else if (reset_type == 1)
+        {
+            // reset to out-of-box condition, then simulate power off/on cycle
+            // return success response before if can't do it after
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[LENGTH] = 2;
+            global_event |= FULL_RESET;      // set reset bit
+        }
+        else  error = INVALID_PARAMETER;
+        break;
+
+
+        default:
+        error = SERVICE_NOT_SUPPORTED;
+        break;
+    }
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
+}
+
+
+
+
+// Returns the state of the device
+UCHAR IDENTITY::get_state(void)
+{
+    return state;
+}
+
+
+
+
+
+// Handles device startup & LED states
+void IDENTITY::device_self_test(void)
+{
+   //In case there is an test in the module
+}
+
+
+
+
+// Sends a DUP MAC ID check request.
+// Two of these are sent during the startup sequence.
+void IDENTITY::send_dup_mac_check_message(void)
+{
+    // Send first dup MAC ID check message
+    // Put message into CAN chip msg object #7 and send
+    // Load CAN message config register - msg length = 7
+    //pokeb(CAN_BASE, 0x76, 0x78);
+
+    // Load data area of CAN chip
+    //pokeb(CAN_BASE, 0x77, 0);		  // request flag (not response)
+    //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x7A, (UCHAR)(serial));
+    //pokeb(CAN_BASE, 0x7B, (UCHAR)(serial >> 8));
+    //pokeb(CAN_BASE, 0x7C, (UCHAR)(serial >> 16));
+    //pokeb(CAN_BASE, 0x7D, (UCHAR)(serial >> 24));
+    //pokeb(CAN_BASE, 0x71, 0x66);      // set msg object #7 transmit request
+
+}
+
+
+
+// Handles operation of overall device, checks for errors, handles LEDs,
+// This runs every 0.25 second.  If the startup self-test is OK,
+// the Device sends two dup MAC ID check messages
+void IDENTITY::update_device(void)
+{
+    UCHAR explicit_conxn_state, io_poll_conxn_state;
+    UCHAR temp;
+
+
+    // For first 2 seconds (8 clock ticks) do self-test
+    if (device_clock < 8) device_self_test();
+    else if ((dup_mac_clock <= 8) &&
+              ((global_status & DEVICE_FAULT) == 0) &&
+              ((global_status & NETWORK_FAULT) == 0))
+    {
+        if (global_status & LONELY_NODE) dup_mac_clock = 0;
+        else
+        {
+            // This generates two dup mac check messages one second apart
+            // If we are the only node on the network, keep sending
+            switch(dup_mac_clock)
+            {
+                case 0:      // start
+                send_dup_mac_check_message();
+                break;
+
+                case 4:      // 1 second has elapsed
+                send_dup_mac_check_message();
+                break;
+
+                case 8:      // 2 seconds have elapsed
+                global_status |= ON_LINE;
+                break;
+            }
+            dup_mac_clock++;
+        }
+    }
+
+    if (device_clock >= 8) // self-test done, update status and module LED
+    {
+        // Copy the global status into the identity object status attribute
+        status = global_status & 0x0F05;  				// zero out some bits
+        if (global_status & DEVICE_FAULT)
+        {
+            // module LED red
+            state = 5;		// indicate device fault
+            //temp = peekb(PIO_BASE, PORTC);
+            temp &= 0xD0;		// red on
+            temp |= 0x10;		// grn off
+            //pokeb(PIO_BASE, PORTC, temp);
+        }
+        else if (global_status & OPERATIONAL)
+        {
+            // module LED green
+            state = 3;			// indicate device is operational
+            //temp = peekb(PIO_BASE, PORTC);
+            temp &= 0xE0;		// grn on
+            temp |= 0x20;		// red off
+            //pokeb(PIO_BASE, PORTC, temp);
+        }
+
+        // Next, handle network bicolor LED
+        // Check state of connections
+        explicit_conxn_state = explicitcon->get_state();
+        io_poll_conxn_state = io_poll->get_state();
+
+        if (global_status & NETWORK_FAULT)
+        {
+            // network LED steady red
+            //temp = peekb(PIO_BASE, PORTC);
+            temp &= 0x70;		// red on
+            temp |= 0x40;		// grn off
+
+            //pokeb(PIO_BASE, PORTC, temp);
+        }
+        else if ((global_status & ON_LINE) == 0)
+        {
+            // network LED off
+            //temp = peekb(PIO_BASE, PORTC);
+            temp |= 0xC0;		// both off
+            //pokeb(PIO_BASE, PORTC, temp);
+        }
+        else if (io_poll_conxn_state == TIMED_OUT)
+        {
+            // network LED flashing red
+            //temp = peekb(PIO_BASE, PORTC);
+            if (((device_clock / 2) % 2) == 0)
+            {
+                temp &= 0x70;		// red on
+                temp |= 0x40;		// grn off
+                //pokeb(PIO_BASE, PORTC, temp);
+            }
+            else
+            {
+                temp |= 0xC0;		// both off
+                //pokeb(PIO_BASE, PORTC, temp);
+            }
+        }
+        else if ((io_poll_conxn_state != ESTABLISHED) &&
+                    (explicit_conxn_state != ESTABLISHED))
+        {
+            // network LED flashing green
+            //temp = peekb(PIO_BASE, PORTC);
+            if (((device_clock / 2) % 2) == 0)
+            {
+                temp &= 0xB0;		// grn on
+                temp |= 0x80;		// red off
+                //pokeb(PIO_BASE, PORTC, temp);
+            }
+            else
+            {
+                temp |= 0xC0;		// both on
+                //pokeb(PIO_BASE, PORTC, temp);
+            }
+        }
+        else if ((io_poll_conxn_state == ESTABLISHED) ||
+                    (explicit_conxn_state == ESTABLISHED))
+        {
+            // at least one connection is established
+            // network LED steady green
+            //temp = peekb(PIO_BASE, PORTC);
+            temp &= 0xB0;		// grn on
+            temp |= 0x80;		// red off
+            //pokeb(PIO_BASE, PORTC, temp);
+        }
+    }
+    device_clock++;
+}
 
 // Handles Explicit request to the DeviceNet Object
 void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
