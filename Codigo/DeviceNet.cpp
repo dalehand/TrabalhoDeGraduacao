@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <dos.h>
 #include "DeviceNet.h"
 
 UCHAR global_CAN_buf[BUFSIZE];      // Buffer with CAN data
 UINT global_timer[10];              // Global timers
+UINT global_status;
+UINT global_event;
 
 class CONNECTION
 {
@@ -24,10 +25,21 @@ private:
     UCHAR consumed_connection_path[PATH_SIZE];
     UINT production_inhibit_time;
 
+
+    UCHAR rcve_index, xmit_index;
+    UCHAR my_rcve_fragment_count, my_xmit_fragment_count;
+    UCHAR xmit_fragment_buf[BUFSIZE];
+    UCHAR rcve_fragment_buf[BUFSIZE];
+    UCHAR ack_timeout_counter;
+
 public:
     UCHAR get_state(void);
     void set_state(UCHAR);
     UCHAR get_timeout_action(void);
+    static void handle_class_inquiry(UCHAR*, UCHAR*);
+    void handle_explicit(UCHAR*, UCHAR*);
+    int link_consumer(UCHAR*);
+    void link_producer(UCHAR*);
     CONNECTION(UCHAR inst)
     {
         instance = inst;
@@ -432,7 +444,7 @@ int CONNECTION::link_consumer(UCHAR request[])
         }
 
         // Check to see if Master has exceeded byte count limit
-        if (rcve_index > consumed_conxn_size)
+        if (rcve_index > consumed_connection_size)
         {
             rcve_index = 0;                       // reset fragment counters
             my_rcve_fragment_count = 0;
@@ -475,7 +487,7 @@ int CONNECTION::link_consumer(UCHAR request[])
                 rcve_index++;
             }
             // Check to see if Master has exceeded byte count limit
-            if (rcve_index > consumed_conxn_size)
+            if (rcve_index > consumed_connection_size)
             {
                 rcve_index = 0;
                 my_rcve_fragment_count = 0;
@@ -514,7 +526,7 @@ int CONNECTION::link_consumer(UCHAR request[])
             }
 
             // Check to see if Master has exceeded byte count limit
-            if (rcve_index > consumed_conxn_size)
+            if (rcve_index > consumed_connection_size)
             {
                 rcve_index = 0;
                 my_rcve_fragment_count = 0;
@@ -546,6 +558,190 @@ int CONNECTION::link_consumer(UCHAR request[])
 
     return NO_RESPONSE;
 }
+
+void CONNECTION::link_producer(UCHAR response[])
+{
+    UCHAR length, bytes_left, i, fragment_count, ack_status;
+    static UCHAR copy[BUFSIZE];
+
+    length = response[LENGTH];
+
+    if (instance == IO_POLL)
+    {
+        // load io poll response into can chip object #9
+        for (i=0; i < length; i++)  						// load CAN data
+        {
+            //pokeb(CAN_BASE, (0x57 + i), response[i]);
+        }
+        //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
+        //pokeb(CAN_BASE, 0x51, 0x66);      					// set transmit request
+    }
+
+
+    else if (response[MESSAGE_TAG] == ACK_TIMEOUT)
+    {
+        ack_timeout_counter++;
+        if (ack_timeout_counter == 1)
+        {
+            // Load last explicit fragment send again
+            length = copy[LENGTH];
+            for (i=0; i < length; i++)  						// load data into CAN
+            {
+                //pokeb(CAN_BASE, (0x67 + i), copy[i]);
+            }
+            //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+            //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+            global_timer[ACK_WAIT] = 20;
+
+        }
+        if (ack_timeout_counter == 2)
+        {
+            // abort trying to send fragmented message
+            xmit_index = 0;
+            my_xmit_fragment_count = 0;
+            ack_timeout_counter = 0;
+            global_timer[ACK_WAIT] = 0;
+        }
+    }
+
+
+    else if (response[MESSAGE_TAG] == RECEIVED_ACK)
+    {
+        fragment_count = response[1] & 0x3F;
+        ack_status = response[2];
+        if (my_xmit_fragment_count == fragment_count)
+        {
+            // If Master returned a bad ACK status, reset everything
+            // and abort the attempt to send message
+            if (ack_status != 0)
+            {
+                xmit_index = 0;
+                my_xmit_fragment_count = 0;
+                ack_timeout_counter = 0;
+                global_timer[ACK_WAIT] = 0;
+            }
+
+            // Master's ACK was OK, so send next fragment unless we were done sending
+            // Keep a copy of what we are sending
+            else
+            {
+                if (xmit_index >= xmit_fragment_buf[LENGTH])
+                {
+                    // got ACK to out final fragment so reset everything
+                    xmit_index = 0;
+                    my_xmit_fragment_count = 0;
+                    ack_timeout_counter = 0;
+                    global_timer[ACK_WAIT] = 0;
+                }
+                else
+                {
+                    // Send another fragment
+                    // Figure out how many bytes are left to send
+                    bytes_left = xmit_fragment_buf[LENGTH] - xmit_index;
+                    my_xmit_fragment_count++;
+                    ack_timeout_counter = 0;
+                    global_timer[ACK_WAIT] = 20;				// restart timer for 1 second
+                    // Load the first byte of the fragment
+                    copy[0] = response[0] | 0x80;
+                    //pokeb(CAN_BASE, 0x67, copy[0]);
+                    if (bytes_left > 6)			// this is a middle fragment
+                    {
+                        copy[1] = MIDDLE_FRAG | my_xmit_fragment_count;
+                        //pokeb(CAN_BASE, 0x68, copy[1]);
+                        length = 8;
+                    }
+                    else   							// this is the last fragment
+                    {
+                        copy[1] = LAST_FRAG | my_xmit_fragment_count;
+                        //pokeb(CAN_BASE, 0x68, copy[1]);
+                        length = bytes_left + 2;
+                    }
+                    // Put in actual data
+                    for (i = 2; i < length; i++)  // put up to 6 more bytes in CAN chip
+                    {
+                        copy[i] = xmit_fragment_buf[xmit_index];
+                        //pokeb(CAN_BASE, (0x67 + i), copy[i]);
+                        xmit_index++;
+                    }
+                    copy[LENGTH] = length;
+                    //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+                    //pokeb(CAN_BASE, 0x61, 0x66);      // set msg object transmit request
+                }
+            }
+        }
+    }
+
+
+    // Send this message in response to receiving an explicit fragment
+    // from the Master that the link comsumer has validated as OK
+    else if (response[MESSAGE_TAG] == SEND_ACK)
+    {
+        length = 3;												// This is a 3 byte message
+        //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
+        //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
+        //pokeb(CAN_BASE, 0x69, 0);								// ack status = OK
+        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+    }
+
+
+
+    // Send this message in response to receiving an explicit fragment
+    // from the Master that exceeded the byte count limit for the connection
+    else if (response[MESSAGE_TAG] == ACK_ERROR)
+    {
+        length = 3;												// This is a 3 byte message
+        //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
+        //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
+        //pokeb(CAN_BASE, 0x69, 1);								// ack status = TOO MUCH DATA
+        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+    }
+
+
+
+    else if (length <= 8)		// Send complete Explicit message
+    {
+        // load explicit response into can chip object #3
+        for (i=0; i < length; i++)  						// load data into CAN
+        {
+            //pokeb(CAN_BASE, (0x67 + i), response[i]);
+        }
+        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+    }
+
+
+
+    else if (length > 8)       // Send first Explicit message fragment
+    {
+        // load explicit response into a buffer to keep around a while
+        memcpy(xmit_fragment_buf, response, BUFSIZE);
+        length = 8;
+        xmit_index = 0;
+        my_xmit_fragment_count = 0;
+        ack_timeout_counter = 0;
+        // Load first fragment into can chip object #3
+        copy[0] = response[0] | 0x80;
+        //pokeb(CAN_BASE, 0x67, copy[0]);
+        xmit_index++;
+        // Put in fragment info
+        copy[1] = FIRST_FRAG | my_xmit_fragment_count;
+        //pokeb(CAN_BASE, 0x68, copy[1]);
+        // Put in actual data
+        for (i = 2; i < 8; i++)  // put 6 more bytes in CAN chip
+        {
+            copy[i] = xmit_fragment_buf[xmit_index];
+            //pokeb(CAN_BASE, (0x67 + i), copy[i]);
+            xmit_index++;
+        }
+        copy[LENGTH] = length;
+        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+        //pokeb(CAN_BASE, 0x61, 0x66);      					// set msg object transmit request
+        global_timer[ACK_WAIT] = 20;							// start timer to wait for ack
+    }
+}
+
 
 class DISCRETE_INPUT_POINT
 {
@@ -1094,6 +1290,126 @@ int DEVICENET::handle_unconnected_port(UCHAR request[], UCHAR response[])
     return OK;
 }
 
+// Handles Explicit request to the DeviceNet Object
+void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
+{
+    UINT service, attrib, error;
+
+    service = request[1];
+    attrib = request[4];
+    error = 0;
+    memset(response, 0, BUFSIZE);
+
+    switch(service)
+    {
+        case GET_REQUEST:
+        switch(attrib)
+        {
+            case 1: // get this device's mac id
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = mac_id;
+            response[LENGTH] = 3;
+            break;
+
+            case 2: // get baud rate
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = baud_rate;
+            response[LENGTH] = 3;
+            break;
+
+            case 3: // get bus off int value
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = bus_off_int;
+            response[LENGTH] = 3;
+            break;
+
+            case 5: // get allocation information struct
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = allocation.choice;
+            response[3] = allocation.my_master;
+            response[LENGTH] = 4;
+            break;
+
+            default:
+            error = ATTRIB_NOT_SUPPORTED;
+            break;
+        }
+        break;
+
+
+        case ALLOCATE_CONNECTIONS:
+        // request to allocate connections received through the message router
+        // forward the request to the unconnected port handler
+        handle_unconnected_port(request, response);
+        break;
+
+
+        case RELEASE_CONNECTIONS:
+        // request to release connections received through the message router
+        // forward the request to the unconnected port handler
+        handle_unconnected_port(request, response);
+        break;
+
+
+
+        default:
+        error = SERVICE_NOT_SUPPORTED;
+        break;
+    }
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
+}
+
+
+// Send a DUP MAC check response message.  This is a message sent in
+// response to receiving a DUP MAC check message (with my MAC ID) from
+// another device which is hoping to go on-line.  Sending this message
+// keeps the offending device from going on-line.
+void DEVICENET::send_dup_mac_response(void)
+{
+    // put bytes into CAN chip msg object #7 and send
+   // load CAN message config register - msg length = 7
+    //pokeb(CAN_BASE, 0x76, 0x78);
+
+    // load data area of CAN chip
+    //pokeb(CAN_BASE, 0x77, 0x80);			// indicate response message
+    //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
+    //pokeb(CAN_BASE, 0x7A, (UCHAR)(serial));
+    //pokeb(CAN_BASE, 0x7B, (UCHAR)(serial >> 8));
+    //pokeb(CAN_BASE, 0x7C, (UCHAR)(serial >> 16));
+    //pokeb(CAN_BASE, 0x7D, (UCHAR)(serial >> 24));
+
+    //pokeb(CAN_BASE, 0x71, 0x66);      // set msg object #7 transmit request
+}
+
+
+// Consume an incoming DUP MAC check message from another device
+int DEVICENET::consume_dup_mac(UCHAR request[])
+{
+    // If message is a response to our dup MAC ID check message
+    // or if we are not on-line yet, error out.  Do not go on-line
+    if (((request[0] & 0x80) != 0) ||      	// message is a response
+        ((global_status & ON_LINE) == 0))      // we are off line
+    {
+        global_status |= DUP_MAC_FAULT;        // set dup MAC error
+        return NO_RESPONSE;               		// send no response
+    }
+    return OK;                                // message consumed successfully
+}
+
+
 class IDENTITY
 {
     private:
@@ -1259,7 +1575,7 @@ void IDENTITY::handle_explicit(UCHAR request[], UCHAR response[])
             response[0] = request[0] & NON_FRAGMENTED;
             response[1] = service | SUCCESS_RESPONSE;
             response[2] = (UCHAR)strlen(product_name);
-            strcpy(&response[3], product_name);
+            strcpy_UCHAR(&response[3], product_name);
             response[LENGTH] = response[2] + 3;
             break;
 
@@ -1319,27 +1635,17 @@ void IDENTITY::handle_explicit(UCHAR request[], UCHAR response[])
     }
 }
 
-
-
-
 // Returns the state of the device
 UCHAR IDENTITY::get_state(void)
 {
     return state;
 }
 
-
-
-
-
 // Handles device startup & LED states
 void IDENTITY::device_self_test(void)
 {
    //In case there is an test in the module
 }
-
-
-
 
 // Sends a DUP MAC ID check request.
 // Two of these are sent during the startup sequence.
@@ -1402,7 +1708,7 @@ void IDENTITY::update_device(void)
         }
     }
 
-    if (device_clock >= 8) // self-test done, update status and module LED
+/*    if (device_clock >= 8) // self-test done, update status and module LED
     {
         // Copy the global status into the identity object status attribute
         status = global_status & 0x0F05;  				// zero out some bits
@@ -1489,12 +1795,44 @@ void IDENTITY::update_device(void)
             temp |= 0x80;		// red off
             //pokeb(PIO_BASE, PORTC, temp);
         }
-    }
+    }*/
     device_clock++;
 }
 
-// Handles Explicit request to the DeviceNet Object
-void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
+class ROUTER
+{
+    private:
+    static UINT class_revision;
+    // address of objects the router will need to send messages to
+    ANALOG_INPUT_POINT *temperature_sensor, *humidity_sensor;
+    ASSEMBLY *assembly;
+    IDENTITY *identity;
+    DEVICENET *devicenet;
+    CONNECTION *explicit, *io_poll;
+
+    public:
+    static void handle_class_inquiry(UCHAR*, UCHAR*);
+    void handle_explicit(UCHAR*, UCHAR*);
+    void route(UCHAR*, UCHAR*);
+    ROUTER(ANALOG_INPUT_POINT *ts, ANALOG_INPUT_POINT *hs, IDENTITY *id,
+             DEVICENET *dn, CONNECTION *ex, CONNECTION *io, ASSEMBLY *as)
+    {
+      // Initialize address of other objects
+        temperature_sensor = ts;
+        humidity_sensor = hs;
+        identity = id;
+        devicenet = dn;
+        explicit = ex;
+        io_poll = io;
+        assembly = as;
+    }
+};
+
+
+
+
+// handle Explicit request to class
+void ROUTER::handle_class_inquiry(UCHAR request[], UCHAR response[])
 {
     UINT service, attrib, error;
 
@@ -1508,32 +1846,11 @@ void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
         case GET_REQUEST:
         switch(attrib)
         {
-            case 1: // get this device's mac id
+            case 1:  // get revision attribute
             response[0] = request[0] & NON_FRAGMENTED;
             response[1] = service | SUCCESS_RESPONSE;
-            response[2] = mac_id;
-            response[LENGTH] = 3;
-            break;
-
-            case 2: // get baud rate
-            response[0] = request[0] & NON_FRAGMENTED;
-            response[1] = service | SUCCESS_RESPONSE;
-            response[2] = baud_rate;
-            response[LENGTH] = 3;
-            break;
-
-            case 3: // get bus off int value
-            response[0] = request[0] & NON_FRAGMENTED;
-            response[1] = service | SUCCESS_RESPONSE;
-            response[2] = bus_off_int;
-            response[LENGTH] = 3;
-            break;
-
-            case 5: // get allocation information struct
-            response[0] = request[0] & NON_FRAGMENTED;
-            response[1] = service | SUCCESS_RESPONSE;
-            response[2] = allocation.choice;
-            response[3] = allocation.my_master;
+            response[2] = LOBYTE(class_revision);
+            response[3] = HIBYTE(class_revision);
             response[LENGTH] = 4;
             break;
 
@@ -1542,21 +1859,6 @@ void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
             break;
         }
         break;
-
-
-        case ALLOCATE_CONNECTIONS:
-        // request to allocate connections received through the message router
-        // forward the request to the unconnected port handler
-        handle_unconnected_port(request, response);
-        break;
-
-
-        case RELEASE_CONNECTIONS:
-        // request to release connections received through the message router
-        // forward the request to the unconnected port handler
-        handle_unconnected_port(request, response);
-        break;
-
 
 
         default:
@@ -1575,41 +1877,175 @@ void DEVICENET::handle_explicit(UCHAR request[], UCHAR response[])
 }
 
 
-// Send a DUP MAC check response message.  This is a message sent in
-// response to receiving a DUP MAC check message (with my MAC ID) from
-// another device which is hoping to go on-line.  Sending this message
-// keeps the offending device from going on-line.
-void DEVICENET::send_dup_mac_response(void)
+
+// Handles Explicit request to the Router Object
+void ROUTER::handle_explicit(UCHAR request[], UCHAR response[])
 {
-    // put bytes into CAN chip msg object #7 and send
-   // load CAN message config register - msg length = 7
-    //pokeb(CAN_BASE, 0x76, 0x78);
+    UINT service, attrib, error;
 
-    // load data area of CAN chip
-    //pokeb(CAN_BASE, 0x77, 0x80);			// indicate response message
-    //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
-    //pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
-    //pokeb(CAN_BASE, 0x7A, (UCHAR)(serial));
-    //pokeb(CAN_BASE, 0x7B, (UCHAR)(serial >> 8));
-    //pokeb(CAN_BASE, 0x7C, (UCHAR)(serial >> 16));
-    //pokeb(CAN_BASE, 0x7D, (UCHAR)(serial >> 24));
+    service = request[1];
+    attrib = request[4];
+    error = 0;
+    memset(response, 0, BUFSIZE);
 
-    //pokeb(CAN_BASE, 0x71, 0x66);      // set msg object #7 transmit request
+    error = SERVICE_NOT_SUPPORTED;  // no services supported
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
 }
 
 
-// Consume an incoming DUP MAC check message from another device
-int DEVICENET::consume_dup_mac(UCHAR request[])
+
+
+// Pass Explicit requests to appropriate object and get response
+void ROUTER::route(UCHAR request[], UCHAR response[])
 {
-    // If message is a response to our dup MAC ID check message
-    // or if we are not on-line yet, error out.  Do not go on-line
-    if (((request[0] & 0x80) != 0) ||      	// message is a response
-        ((global_status & ON_LINE) == 0))      // we are off line
+    UINT class_id, instance, error;
+
+    class_id = request[2];
+    instance = request[3];
+    error = 0;
+    memset(response, 0, BUFSIZE);
+
+    switch(class_id)
     {
-        global_status |= DUP_MAC_FAULT;        // set dup MAC error
-        return NO_RESPONSE;               		// send no response
+        case ANALOG_INPUT_POINT_CLASS:
+        switch(instance)
+        {
+            case 0:  // direct this to the class
+            ANALOG_INPUT_POINT::handle_class_inquiry(request, response);
+            break;
+
+            case 1:  // direct this to instance 1
+            temperature_sensor->handle_explicit(request, response);
+            break;
+
+            case 2:  // direct this to instance 2
+            humidity_sensor->handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+        }
+        break;
+
+
+        case ASSEMBLY_CLASS:
+        switch(instance)
+        {
+            case 0:  // direct this to the class
+            ASSEMBLY::handle_class_inquiry(request, response);
+            break;
+
+            case 1:  // direct this to instance 1
+            assembly->handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+        }
+        break;
+
+
+
+        case IDENTITY_CLASS:
+        switch(instance)
+        {
+            case 0:     // direct this to the class
+            IDENTITY::handle_class_inquiry(request, response);
+            break;
+
+            case 1:     // direct this to instance 1
+            identity->handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+        }
+        break;
+
+
+        case DEVICENET_CLASS:
+        switch(instance)
+        {
+            case 0:    // direct this to the class
+            DEVICENET::handle_class_inquiry(request, response);
+            break;
+
+            case 1:    // direct this to instance 1
+            devicenet->handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+        }
+        break;
+
+
+        case CONNECTION_CLASS:
+        switch(instance)
+        {
+            case 0:    		// direct this to the class
+            CONNECTION::handle_class_inquiry(request, response);
+            break;
+
+            case 1:        // direct this to instance 1
+            explicit->handle_explicit(request, response);
+         break;
+
+            case 2:        // direct this to instance 2
+            io_poll->handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+        }
+        break;
+
+
+        case ROUTER_CLASS:
+        switch(instance)
+        {
+            case 0:		// direct this to the class
+            handle_class_inquiry(request, response);
+            break;
+
+            case 1:     // direct this to instance 1
+            handle_explicit(request, response);
+            break;
+
+            default:
+            error = OBJECT_DOES_NOT_EXIST;
+            break;
+
+        }
+        break;
+
+
+        default:  // no such class
+        error = OBJECT_DOES_NOT_EXIST;
+        break;
     }
-    return OK;                                // message consumed successfully
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
 }
 
 
@@ -1617,10 +2053,14 @@ int DEVICENET::consume_dup_mac(UCHAR request[])
 UINT CONNECTION::class_revision = 1;
 UINT DISCRETE_INPUT_POINT::class_revision = 1;
 UINT DISCRETE_OUTPUT_POINT::class_revision = 1;
+UINT IDENTITY::class_revision = 1;
+UINT DEVICENET::class_revision = 2;
 
-void main(void)
+
+int main()
 {
     DISCRETE_INPUT_POINT *sensor = new DISCRETE_INPUT_POINT[NUM_SENSORS-1];
     for(UCHAR i=1; i<=NUM_SENSORS; i++)
         sensor[i-1].init_obj(i); // sensor instance 1 is sensor[0]
+    return 0;
 }
