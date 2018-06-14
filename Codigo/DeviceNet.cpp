@@ -2,11 +2,7 @@
 #include <string.h>
 #include <math.h>
 #include "DeviceNet.h"
-
-UCHAR global_CAN_buf[BUFSIZE];      // Buffer with CAN data
-UINT global_timer[10];              // Global timers
-UINT global_status;
-UINT global_event;
+#include "SCan.h"
 
 class CONNECTION
 {
@@ -572,9 +568,12 @@ void CONNECTION::link_producer(UCHAR response[])
         for (i=0; i < length; i++)  						// load CAN data
         {
             //pokeb(CAN_BASE, (0x57 + i), response[i]);
+            candata[i] = response[i]
         }
         //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
+        candlc = length;
         //pokeb(CAN_BASE, 0x51, 0x66);      					// set transmit request
+        write_flag = 1;
     }
 
 
@@ -1808,7 +1807,7 @@ class ROUTER
     ASSEMBLY *assembly;
     IDENTITY *identity;
     DEVICENET *devicenet;
-    CONNECTION *explicit, *io_poll;
+    CONNECTION *explicito, *io_poll;
 
     public:
     static void handle_class_inquiry(UCHAR*, UCHAR*);
@@ -1822,7 +1821,7 @@ class ROUTER
         humidity_sensor = hs;
         identity = id;
         devicenet = dn;
-        explicit = ex;
+        explicito = ex;
         io_poll = io;
         assembly = as;
     }
@@ -2000,7 +1999,7 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
             break;
 
             case 1:        // direct this to instance 1
-            explicit->handle_explicit(request, response);
+            explicito->handle_explicit(request, response);
          break;
 
             case 2:        // direct this to instance 2
@@ -2049,13 +2048,21 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
 }
 
 
+void check_message()
+{
+    if(read_flag)
+    {
+
+    }
+}
+
 // Class Revisions
 UINT CONNECTION::class_revision = 1;
 UINT DISCRETE_INPUT_POINT::class_revision = 1;
 UINT DISCRETE_OUTPUT_POINT::class_revision = 1;
 UINT IDENTITY::class_revision = 1;
 UINT DEVICENET::class_revision = 2;
-
+UINT ROUTER::class_revision = 1;
 
 int main()
 {

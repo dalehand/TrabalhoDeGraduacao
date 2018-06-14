@@ -147,14 +147,3 @@ typedef unsigned long ULONG;
 #define DEFAULT_MASTER_MAC_ID 0xFF
 #define	EXPLICIT_TYPE 0x00
 #define IO_TYPE 0x01
-
-void strcpy_UCHAR (UCHAR *dst, char *src)
-{
-  int i=0;
-  while(src[i]!='\0')
-    {
-      dst[i] = src[i];
-      i++;
-    }
-  dst[i]='\0';
-}
