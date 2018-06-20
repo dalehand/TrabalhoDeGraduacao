@@ -8,7 +8,8 @@ class CONNECTION
 {
 private:
     static UINT class_revision;
-    static UCHAR path[PATH_SIZE];
+    static UCHAR path_in[PATH_SIZE];
+    static UCHAR path_out[PATH_SIZE];
     UCHAR state, instance, instance_type, transport_class_trigger; //required instance attributes (CIP v1-3.13)
     UINT produced_connection_id, consumed_connection_id;
     UCHAR initial_comm_characteristics;
@@ -568,7 +569,7 @@ void CONNECTION::link_producer(UCHAR response[])
         for (i=0; i < length; i++)  						// load CAN data
         {
             //pokeb(CAN_BASE, (0x57 + i), response[i]);
-            candata[i] = response[i]
+            candata[i] = response[i];
         }
         //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
         candlc = length;
@@ -739,6 +740,151 @@ void CONNECTION::link_producer(UCHAR response[])
         //pokeb(CAN_BASE, 0x61, 0x66);      					// set msg object transmit request
         global_timer[ACK_WAIT] = 20;							// start timer to wait for ack
     }
+}
+
+class ASSEMBLY
+{
+    private:
+    static UINT class_revision;
+    UCHAR data[NUM_SENSORS];
+
+    IDENTITY *identity;
+    DISCRETE_INPUT_POINT *sensor;
+
+    public:
+    ASSEMBLY(IDENTITY *id, DISCRETE_INPUT_POINT *sensin)
+    {
+        identity = id;
+        sensor = sensin;
+   }
+    static void handle_class_inquiry(UCHAR*, UCHAR*);
+    void handle_explicit(UCHAR*, UCHAR*);
+    void update_data(void);
+    void handle_io_poll_request(UCHAR*, UCHAR*);
+
+};
+
+
+
+
+
+// Handle an Explicit request directed to the class
+void ASSEMBLY::handle_class_inquiry(UCHAR request[], UCHAR response[])
+{
+    UINT service, attrib, error;
+
+    service = request[1];
+    attrib = request[4];
+    error = FALSE;
+    memset(response, 0, BUFSIZE);
+
+    switch(service)
+    {
+        case GET_REQUEST:
+        switch(attrib)
+        {
+            case 1:  // handle revision attribute of class
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = LOBYTE(class_revision);
+            response[3] = HIBYTE(class_revision);
+            response[LENGTH] = 4;
+            break;
+
+            default:
+            error = ATTRIB_NOT_SUPPORTED;
+            break;
+        }
+        break;
+
+
+        default:
+        error = SERVICE_NOT_SUPPORTED;
+        break;
+    }
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
+}
+
+
+
+
+// Handle an explicit request to the assembly object
+void ASSEMBLY::handle_explicit(UCHAR request[], UCHAR response[])
+{
+    UINT service, attrib, error;
+    UCHAR temp;
+    service = request[1];
+    attrib = request[4];
+    error = FALSE;
+    memset(response, 0, BUFSIZE);
+
+    switch(service)
+    {
+        case GET_REQUEST:
+        switch(attrib)
+        {
+            case 3:   // get data - array of 3 bytes
+            response[0] = request[0] & NON_FRAGMENTED;
+            response[1] = service | SUCCESS_RESPONSE;
+            response[2] = data[0];
+            response[3] = data[1];
+            response[4] = data[2];
+            response[LENGTH] = 5;
+            break;
+
+            default:
+            error = ATTRIB_NOT_SUPPORTED;
+            break;
+        }
+        break;
+
+
+        default:
+        error = SERVICE_NOT_SUPPORTED;
+        break;
+    }
+
+    if (error)
+    {
+        response[0] = request[0] & NON_FRAGMENTED;
+        response[1] = ERROR_RESPONSE;
+        response[2] = error;
+        response[3] = NO_ADDITIONAL_CODE;
+        response[LENGTH] = 4;
+    }
+}
+
+
+
+// Runs every 0.25 seconds to update the local copy
+// This keeps the values up to date, and ready to send.
+void ASSEMBLY::update_data(void)
+{
+    // the assembly object keeps local copies of the values it needs to
+    // send in the I/O POLL response.  It is faster that way.
+    data[0] = identity->get_state();
+    data[1] = temperature_sensor->get_value();
+    data[2] = humidity_sensor->get_value();
+}
+
+
+
+// Handle an I/O Poll request for data
+void ASSEMBLY::handle_io_poll_request(UCHAR request[], UCHAR response[])
+{
+    // This is an input assembly so it does not expect to receive data
+    // from master. It returns 3 bytes of data to send in the io poll response
+    memset(response, 0, BUFSIZE);
+    memcpy(response, data, 3);
+    response[LENGTH] = 3;
 }
 
 
@@ -2052,7 +2198,30 @@ void check_message()
 {
     if(read_flag)
     {
-
+        switch(canid)
+        {
+            case 0b10111100101: // Master’s I/O Poll Command/Change of State/Cyclic Message (CIPv3c3.7): Group 2 MACID = 60 Message ID = 5
+                global_event |= IO_POLL_REQUEST;
+                break;
+            case 0b10111100100: // Master’s Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 4
+                global_event |= EXPLICIT_REQUEST;
+                break;
+            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
+                global_event |= DUP_MAC_REQUEST;
+                break;
+            case 0b10111100110: // Unconnected Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 6
+                global_event |= UNC_PORT_REQUEST;
+                break;
+            case 0b01111111100: // Slave’s I/O Poll Response or Change of State/Cyclic Acknowledge Message (CIPv3c3.7): Group 1 MACID = 60 Message ID = 15
+                global_event |= 0x0010;
+                break;
+            case 0b10111100011: // Slave’s Explicit/ Unconnected Response Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 3
+                global_event |= 0x0020;
+                break;
+            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
+                global_event |= 0x0040;
+                break;
+        }
     }
 }
 
@@ -2063,6 +2232,34 @@ UINT DISCRETE_OUTPUT_POINT::class_revision = 1;
 UINT IDENTITY::class_revision = 1;
 UINT DEVICENET::class_revision = 2;
 UINT ROUTER::class_revision = 1;
+
+UCHAR CONNECTION::path_in[10] =  {0x20, 0x04, 0x24, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 0100 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
+                                                                    // 001 - Logical Segment
+                                                                    // 000 - Class ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000100 - Class ID #4  => Assembly Object (CIPv1-5.43)
+                                                                    // 001 - Logical segment
+                                                                    // 001 - Instance ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000001 - Instance ID #1  => 1st instance of assembly class
+                                                                    // 001 - Logical Segment
+                                                                    // 100 - Attribute ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000011 - Attribute #3 => Data (CIPv1-5-44)
+
+UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 1000 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
+                                                                    // 001 - Logical Segment
+                                                                    // 000 - Class ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000100 - Class ID #4  => Assembly Object (CIPv1-5.43)
+                                                                    // 001 - Logical segment
+                                                                    // 010 - Instance ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000001 - Instance ID #1  => 1st instance of assembly class
+                                                                    // 001 - Logical Segment
+                                                                    // 100 - Attribute ID
+                                                                    // 00 - 8-bit logical address
+                                                                    // 00000011 - Attribute #3 => Data (CIPv1-5-44)
 
 int main()
 {
