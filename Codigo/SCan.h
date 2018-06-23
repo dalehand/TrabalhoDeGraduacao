@@ -17,8 +17,8 @@
 int write_flag = 0;
 int read_flag = 0;
 int sock_can_on = 1;
-UCHAR canid, candlc;
-UCHAR candata[BUFSIZE];
+UINT can_id_write;
+UCHAR global_CAN_write[BUFSIZE];
 
 UCHAR global_CAN_buf[BUFSIZE];
 UINT global_timer[10];
@@ -42,7 +42,8 @@ void sock_can()
   struct sockaddr_can addr;
   struct can_frame frame;
   int s;
-  int count=0;
+  int valid_message;
+  int count = 0;
   memset(&ifr, 0x0, sizeof(ifr));
   memset(&addr, 0x0, sizeof(addr));
   memset(&frame, 0x0, sizeof(frame));
@@ -58,25 +59,63 @@ void sock_can()
   while(sock_can_on)
     {
       read(s, &frame, sizeof(frame));
-      canid = frame.can_id;
-      candlc = frame.can_dlc;
+      valid_message = 0;
+
+      switch(frame.can_id)
+        {
+            case 0b10111100101: // Master’s I/O Poll Command/Change of State/Cyclic Message (CIPv3c3.7): Group 2 MACID = 60 Message ID = 5
+                global_event |= IO_POLL_REQUEST;
+		valid_message = 1;
+                break;
+            case 0b10111100100: // Master’s Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 4
+                global_event |= EXPLICIT_REQUEST;
+		valid_message = 1;
+                break;
+            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
+                global_event |= DUP_MAC_REQUEST;
+		valid_message = 1;
+                break;
+            case 0b10111100110: // Unconnected Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 6
+                global_event |= UNC_PORT_REQUEST;
+		valid_message = 1;
+                break;
+            case 0b01111111100: // Slave’s I/O Poll Response or Change of State/Cyclic Acknowledge Message (CIPv3c3.7): Group 1 MACID = 60 Message ID = 15
+                global_event |= 0x0010;
+		valid_message = 1;
+                break;
+            case 0b10111100011: // Slave’s Explicit/ Unconnected Response Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 3
+                global_event |= 0x0020;
+		valid_message = 1;
+                break;
+            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
+                global_event |= 0x0040;
+		valid_message = 1;
+                break;
+	    default:
+	        valid_message = 0;
+		break;
+        }
+      
+      if(valid_message)
+      {
       for(count=0;count<candlc;count++)
 	{
-	  candata[count]=frame.data[count];
+	  global_CAN_buf[count]=frame.data[count];
 	}
-      read_flag = 1;
+      global_CAN_buf[LENGTH] = frame.can_dlc;
+      }
       if(write_flag)
 	{
-	  frame.can_id = canid;
-	  frame.can_dlc = candlc;
-	  for(count=0;count<candlc;count++)
+	  frame.can_id = can_id_write;
+	  frame.can_dlc = global_CAN_write[LENGTH];
+	  for(count=0;count<global_CAN_write[LENGTH];count++)
 	    {
-	      frame.data[count]=candata[count];
+	      frame.data[count]=global_CAN_write[count];
 	    }
 	  //strcpy((char *)frame.data, candata);
 	  write(s,&frame,sizeof(frame));
 	  write_flag=0;
 	}
-    }
+      }
   close(s);
 }
