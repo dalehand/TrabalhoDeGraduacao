@@ -746,7 +746,7 @@ class ASSEMBLY
 {
     private:
     static UINT class_revision;
-    UCHAR data[NUM_SENSORS];
+    UCHAR data[NUM_IN];
 
     IDENTITY *identity;
     DISCRETE_INPUT_POINT *sensor;
@@ -763,10 +763,6 @@ class ASSEMBLY
     void handle_io_poll_request(UCHAR*, UCHAR*);
 
 };
-
-
-
-
 
 // Handle an Explicit request directed to the class
 void ASSEMBLY::handle_class_inquiry(UCHAR request[], UCHAR response[])
@@ -861,8 +857,6 @@ void ASSEMBLY::handle_explicit(UCHAR request[], UCHAR response[])
         response[LENGTH] = 4;
     }
 }
-
-
 
 // Runs every 0.25 seconds to update the local copy
 // This keeps the values up to date, and ready to send.
@@ -2263,8 +2257,25 @@ UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 
 
 int main()
 {
-    DISCRETE_INPUT_POINT *sensor = new DISCRETE_INPUT_POINT[NUM_SENSORS-1];
-    for(UCHAR i=1; i<=NUM_SENSORS; i++)
-        sensor[i-1].init_obj(i); // sensor instance 1 is sensor[0]
+
+    UINT e; // Temporary variable that stores global_event
+
+    DISCRETE_INPUT_POINT *input_point = new DISCRETE_INPUT_POINT[NUM_IN-1];
+    CONNECTION expl(EXPLICIT);
+    CONNECTION io_poll(IO_POLL);
+    DEVICENET devicenet(MAC_ID, BAUD_RATE, VENDOR_ID, SERIAL_NUM, &expl, &io_poll);
+    IDENTITY identity(VENDOR_ID, SERIAL_NUM, &expl, &io_poll);
+
+    for(UCHAR i=1; i<=NUM_IN; i++)
+        input_point[i-1].init_obj(i); // sensor instance 1 is sensor[0]
     return 0;
+
+    e = global_event;
+
+    if ((e & DUP_MAC_REQUEST) && !(e & (DUP_MAC_REQUEST - 1))) // Incoming duplicate message from another device
+    {
+        global_event &= ~DUP_MAC_REQUEST; // Clear bit on global event
+        if(devicenet.consume_dup_mac(request))
+            devicenet.send_dup_mac_response();
+    }
 }
