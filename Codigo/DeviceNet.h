@@ -6,10 +6,12 @@ typedef unsigned long ULONG;
 #define LOBYTE(w) ((UCHAR)(w))
 #define HIBYTE(w) ((UCHAR)((int)(w) >> 8))
 
-#define MAC_ID 60 // Between 0-62 (63 reserved by devicenet)
-#define BAUD_RATE 0 // 0=125k, 1=250k, 2=250k
-#define NUM_SENSORS 45 // Number of sensors (Max 64)
-#define NUM_TRAINS 2 // Number of trains (Max 4)
+#define MAC_ID 0x3c // Between 0-62 (63 reserved by devicenet)
+#define BAUD_RATE 0x00 // 0=125k, 1=250k, 2=250k
+#define VENDOR_ID 0x1234 // Dummy value
+#define SERIAL_ID 0x2345 // Dummy value
+#define NUM_IN 45 // Number of sensors (Max 64)
+#define NUM_OUT 2 // Number of trains (Max 4)
 
 
 #define FALSE 0
