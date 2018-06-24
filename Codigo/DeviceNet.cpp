@@ -71,6 +71,19 @@ void CONNECTION::set_state(UCHAR st)
         consumed_connection_size = 0xFFFF; // Message router maximum amount of data
         expected_packet_rate = 2500; // Default value (CIPv3-3.30)
         watchdog_timeout_action = 0x01; // auto delete (CIPv3-3.30)
+        produced_connection_path_length = 0;
+        consumed_connection_path_length = 0;
+        memset(produced_connection_path, 0, 10);
+        memset(consumed_connection_path, 0, 10);
+        production_inhibit_time = 0;
+        rcve_index = 0;
+        xmit_index = 0;
+        my_rcve_fragment_count = 0;
+        my_xmit_fragment_count = 0;
+        memset(rcve_fragment_buf, 0, BUFSIZE);
+        memset(xmit_fragment_buf, 0, BUFSIZE);
+        ack_timeout_counter = 0;
+        global_timer[EXPLICIT] = (expected_packet_rate / 50) * 4;
 
     }
     if((instance == IO_POLL)&&(state == CONFIGURING))
@@ -80,10 +93,22 @@ void CONNECTION::set_state(UCHAR st)
         produced_connection_id = 0x3FF; // MessageGroup1 CIPv3-3.4 CIPv3-2.4
         consumed_connection_id = 0x5FD; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         initial_comm_characteristics = 0x01; // 0 = Produce across message group 1; 1 = Consume across message group 2(destination) CIPv3-6/7
-        produced_connection_size = 3;            // i/o poll response length
-        consumed_connection_size = 0;
+        produced_connection_size = 3; // i/o poll response length
+        consumed_connection_size = 0; // i/o poll request length
         expected_packet_rate = 0; // Default value (CIPv3-3.30)
         watchdog_timeout_action = 0x00; // go to timed-out (CIPv3-3.30)
+        produced_connection_path_length = 6;
+        consumed_connection_path_length = 6;
+        memcpy(produced_connection_path, path_in, 6);
+        memcpy(consumed_connection_path, path_out, 6);
+        production_inhibit_time = 0;
+        rcve_index = 0;
+        xmit_index = 0;
+        my_rcve_fragment_count = 0;
+        my_xmit_fragment_count = 0;
+        memset(rcve_fragment_buf, 0, BUFSIZE);
+        memset(xmit_fragment_buf, 0, BUFSIZE);
+        ack_timeout_counter = 0;
 
     }
     if (state == NON_EXISTENT)
@@ -261,8 +286,16 @@ void CONNECTION::handle_explicit(UCHAR request[], UCHAR response[])
             case 16:  // consumed conxn path
             response[0] = request[0] & NON_FRAGMENTED;
             response[1] = service | SUCCESS_RESPONSE;
-            // path is NULL for both Explicit and I/O Poll Connections
-            response[LENGTH] = 2;
+            if (instance_type == EXPLICIT_TYPE)
+            {
+                // Path is NULL for Explicit Connection
+                response[LENGTH] = 2;
+            }
+            else  // Path for data sent in I/O Poll response
+            {
+                memcpy(&response[2], consumed_connection_path, 6);
+                response[LENGTH] = 8;
+            }
             break;
 
             case 17:  // production inhibit time
@@ -382,6 +415,7 @@ int CONNECTION::link_consumer(UCHAR request[])
     // Handle an I/O Poll request
     if (instance == IO_POLL)
     {
+        /*******************************************/
         // The Master should not send me any data in I/O message
         if (request[LENGTH] == 0) return OK;
         else return NO_RESPONSE;
@@ -569,10 +603,11 @@ void CONNECTION::link_producer(UCHAR response[])
         for (i=0; i < length; i++)  						// load CAN data
         {
             //pokeb(CAN_BASE, (0x57 + i), response[i]);
-            candata[i] = response[i];
+            global_CAN_write[i] = response[i];
         }
         //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
-        candlc = length;
+        global_CAN_write[LENGTH] = length;
+        can_id_write = 0x0010;
         //pokeb(CAN_BASE, 0x51, 0x66);      					// set transmit request
         write_flag = 1;
     }
@@ -1520,8 +1555,19 @@ void DEVICENET::send_dup_mac_response(void)
     // put bytes into CAN chip msg object #7 and send
    // load CAN message config register - msg length = 7
     //pokeb(CAN_BASE, 0x76, 0x78);
-
     // load data area of CAN chip
+
+    can_id_write = 0b10111100111;
+    global_CAN_write[0] = 0x80;
+    global_CAN_write[1] = LOBYTE(vendor_id);
+    global_CAN_write[2] = HIBYTE(vendor_id);
+    global_CAN_write[3] = (UCHAR)(serial);
+    global_CAN_write[4] = (UCHAR)(serial >> 8);
+    global_CAN_write[5] = (UCHAR)(serial >> 16);
+    global_CAN_write[6] = (UCHAR)(serial >> 24);
+    global_CAN_write[LENGTH] = 7;
+    write_flag = 1;
+
     //pokeb(CAN_BASE, 0x77, 0x80);			// indicate response message
     //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
     //pokeb(CAN_BASE, 0x79, HIBYTE(vendor_id));
@@ -1795,6 +1841,17 @@ void IDENTITY::send_dup_mac_check_message(void)
     // Load CAN message config register - msg length = 7
     //pokeb(CAN_BASE, 0x76, 0x78);
 
+    can_id_write = 0b10111100111;
+    global_CAN_write[0] = 0x00;
+    global_CAN_write[1] = LOBYTE(vendor_id);
+    global_CAN_write[2] = HIBYTE(vendor_id);
+    global_CAN_write[3] = (UCHAR)(serial);
+    global_CAN_write[4] = (UCHAR)(serial >> 8);
+    global_CAN_write[5] = (UCHAR)(serial >> 16);
+    global_CAN_write[6] = (UCHAR)(serial >> 24);
+    global_CAN_write[LENGTH] = 7;
+    write_flag = 1;
+
     // Load data area of CAN chip
     //pokeb(CAN_BASE, 0x77, 0);		  // request flag (not response)
     //pokeb(CAN_BASE, 0x78, LOBYTE(vendor_id));
@@ -1943,7 +2000,9 @@ class ROUTER
     private:
     static UINT class_revision;
     // address of objects the router will need to send messages to
-    ANALOG_INPUT_POINT *temperature_sensor, *humidity_sensor;
+
+    DISCRETE_INPUT_POINT *discretein;
+    DISCRETE_OUTPUT_POINT *discreteout;
     ASSEMBLY *assembly;
     IDENTITY *identity;
     DEVICENET *devicenet;
@@ -1953,12 +2012,11 @@ class ROUTER
     static void handle_class_inquiry(UCHAR*, UCHAR*);
     void handle_explicit(UCHAR*, UCHAR*);
     void route(UCHAR*, UCHAR*);
-    ROUTER(ANALOG_INPUT_POINT *ts, ANALOG_INPUT_POINT *hs, IDENTITY *id,
+    ROUTER(DISCRETE_INPUT_POINT *in, DISCRETE_OUTPUT_POINT *out,IDENTITY *id,
              DEVICENET *dn, CONNECTION *ex, CONNECTION *io, ASSEMBLY *as)
     {
       // Initialize address of other objects
-        temperature_sensor = ts;
-        humidity_sensor = hs;
+        discretein = in;
         identity = id;
         devicenet = dn;
         explicito = ex;
@@ -2046,7 +2104,7 @@ void ROUTER::handle_explicit(UCHAR request[], UCHAR response[])
 void ROUTER::route(UCHAR request[], UCHAR response[])
 {
     UINT class_id, instance, error;
-
+    int i = 1;
     class_id = request[2];
     instance = request[3];
     error = 0;
@@ -2054,27 +2112,41 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
 
     switch(class_id)
     {
-        case ANALOG_INPUT_POINT_CLASS:
-        switch(instance)
-        {
-            case 0:  // direct this to the class
-            ANALOG_INPUT_POINT::handle_class_inquiry(request, response);
-            break;
-
-            case 1:  // direct this to instance 1
-            temperature_sensor->handle_explicit(request, response);
-            break;
-
-            case 2:  // direct this to instance 2
-            humidity_sensor->handle_explicit(request, response);
-            break;
-
-            default:
-            error = OBJECT_DOES_NOT_EXIST;
-            break;
+        case DISCRETE_INPUT_POINT_CLASS:
+        if(instance == 0)
+            DISCRETE_INPUT_POINT::handle_class_inquiry(request, response);
+        else{
+            while((i != -1)&&( i <= NUM_IN))
+            {
+                if(intance == i)
+                {
+                    (*discretein[i-1]).handle_class_inquiry(request, response);
+                    i=-2;
+                }
+                i++;
+            }
         }
+        if(instance>NUM_IN)
+            error = OBJECT_DOES_NOT_EXIST;
         break;
 
+    case DISCRETE_OUTPUT_POINT_CLASS:
+    if(instance == 0)
+        DISCRETE_OUTPUT_POINT::handle_class_inquiry(request, response);
+    else{
+        while((i != -1)&&( i <= NUM_OUT))
+        {
+            if(intance == i)
+            {
+                (*discreteout[i-1]).handle_class_inquiry(request, response);
+                i=-2;
+            }
+            i++;
+        }
+    }
+    if(instance>NUM_IN)
+        error = OBJECT_DOES_NOT_EXIST;
+    break;
 
         case ASSEMBLY_CLASS:
         switch(instance)
@@ -2187,38 +2259,6 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
     }
 }
 
-
-void check_message()
-{
-    if(read_flag)
-    {
-        switch(canid)
-        {
-            case 0b10111100101: // Master’s I/O Poll Command/Change of State/Cyclic Message (CIPv3c3.7): Group 2 MACID = 60 Message ID = 5
-                global_event |= IO_POLL_REQUEST;
-                break;
-            case 0b10111100100: // Master’s Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 4
-                global_event |= EXPLICIT_REQUEST;
-                break;
-            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
-                global_event |= DUP_MAC_REQUEST;
-                break;
-            case 0b10111100110: // Unconnected Explicit Request Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 6
-                global_event |= UNC_PORT_REQUEST;
-                break;
-            case 0b01111111100: // Slave’s I/O Poll Response or Change of State/Cyclic Acknowledge Message (CIPv3c3.7): Group 1 MACID = 60 Message ID = 15
-                global_event |= 0x0010;
-                break;
-            case 0b10111100011: // Slave’s Explicit/ Unconnected Response Messages (CIPv3c3.7): Group 2 MACID = 60 Message ID = 3
-                global_event |= 0x0020;
-                break;
-            case 0b10111100111: // Duplicate MAC ID Check Messages: Group 2 MACID = 60 Message ID = 7
-                global_event |= 0x0040;
-                break;
-        }
-    }
-}
-
 // Class Revisions
 UINT CONNECTION::class_revision = 1;
 UINT DISCRETE_INPUT_POINT::class_revision = 1;
@@ -2259,7 +2299,8 @@ int main()
 {
 
     UINT e; // Temporary variable that stores global_event
-
+    UCHAR request[BUFSIZE];
+    UCHAR response[BUFSIZE];
     DISCRETE_INPUT_POINT *input_point = new DISCRETE_INPUT_POINT[NUM_IN-1];
     CONNECTION expl(EXPLICIT);
     CONNECTION io_poll(IO_POLL);
@@ -2270,12 +2311,82 @@ int main()
         input_point[i-1].init_obj(i); // sensor instance 1 is sensor[0]
     return 0;
 
-    e = global_event;
-
-    if ((e & DUP_MAC_REQUEST) && !(e & (DUP_MAC_REQUEST - 1))) // Incoming duplicate message from another device
+    while(1)
     {
-        global_event &= ~DUP_MAC_REQUEST; // Clear bit on global event
-        if(devicenet.consume_dup_mac(request))
-            devicenet.send_dup_mac_response();
+        e = global_event;
+
+        if ((e & DUP_MAC_REQUEST) && !(e & (DUP_MAC_REQUEST - 1))) // Incoming message from another device
+        {
+            global_event &= ~DUP_MAC_REQUEST; // Clear bit on global event
+            memcpy(request, global_CAN_buf, BUFSIZE);
+            if(devicenet.consume_dup_mac(request)) // If receives a dup mac request with the same macid, respond to give error
+                devicenet.send_dup_mac_response();
+        }
+
+        // Incoming message to the Unconnected Port
+        e = global_event;
+        if ((e & UNC_PORT_REQUEST) && !(e & (UNC_PORT_REQUEST - 1)))
+        {
+            global_event &= ~UNC_PORT_REQUEST;				// clear bit
+            // must be online with no critical errors
+            if ((global_status & ON_LINE) && !(global_status & NETWORK_FAULT))
+            {
+                // Get request message from global ISR buffer
+                disable();
+                memcpy(request, global_CAN_buf, BUFSIZE);
+                enable();
+                if (devicenet.handle_unconnected_port(request, response));
+            {
+                    // Note: I am not using link producer to send response because
+                    // the Unconnected port should have its own direct connection to
+                    // the network - So load response directly into can chip object #3
+                //length = response[LENGTH];
+                global_CAN_write[LENGTH] = response[LENGTH];
+                    for (i=0; i < length; i++)  						// load data into CAN
+                    {
+                        //pokeb(CAN_BASE, (0x67 + i), response[i]);
+                        global_CAN_write[i] = response[i];
+                    }
+                    //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+                    //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+                    write_flag = 1;
+            }
+          }
+        }
+
+        // Timeout of the Explicit connection
+        e = global_event;
+        if ((e & EXPLICIT_TIMEOUT) && !(e & (EXPLICIT_TIMEOUT - 1)))
+        {
+            global_event &= ~EXPLICIT_TIMEOUT;	// clear bit
+            devicenet.handle_timeout(EXPLICIT_CONXN);
+        }
+
+
+        // Timeout of the I/O Poll connection
+        e = global_event;
+        if ((e & IO_POLL_TIMEOUT) && !(e & (IO_POLL_TIMEOUT - 1)))
+        {
+            global_event &= ~IO_POLL_TIMEOUT;	// clear bit
+            devicenet.handle_timeout(IO_POLL_CONXN);
+        }
+
+        // Timeout waiting for an acknowlege message(to a fragment I sent)
+          e = global_event;
+          if ((e & ACK_WAIT_TIMEOUT) && !(e & (ACK_WAIT_TIMEOUT - 1)))
+          {
+              global_event &= ~ACK_WAIT_TIMEOUT;
+              // Notify link producer that we have timed-out while waiting for an ACK
+              request[MESSAGE_TAG] = ACK_TIMEOUT;
+              explicit.link_producer(request);
+          }
+
+        e = global_event;
+        if ((e & FULL_RESET) && !(e & (FULL_RESET - 1)))
+        {
+            global_event &= ~FULL_RESET;
+            // Go into loop and let watchdog reset the device
+            while (1);
+        }
     }
 }
