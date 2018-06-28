@@ -7,12 +7,14 @@ typedef unsigned long ULONG;
 #define HIBYTE(w) ((UCHAR)((int)(w) >> 8))
 
 #define MAC_ID 0x3c // Between 0-62 (63 reserved by devicenet)
-#define BAUD_RATE 0x00 // 0=125k, 1=250k, 2=250k
+#define BAUD_RATE 0x00 // 0=125k, 1=250k, 2=500k
 #define VENDOR_ID 0x1234 // Dummy value
 #define SERIAL_ID 0x2345 // Dummy value
 #define NUM_IN 45 // Number of sensors (Max 64)
 #define NUM_OUT 2 // Number of trains (Max 4)
 
+int pinout[8]={8, 9, 7, 0, 2, 3, 15, 16}; 
+int pinin[9]={30, 21, 22, 23, 24, 25, 27, 28, 29};
 
 #define FALSE 0
 #define TRUE 1
