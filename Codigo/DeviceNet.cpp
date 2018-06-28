@@ -67,8 +67,8 @@ void CONNECTION::set_state(UCHAR st)
         produced_connection_id = 0x5FB; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         consumed_connection_id = 0x5FC; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         initial_comm_characteristics = 0x21; // 2 = Produce across message group 2(source); 1 = Consume across message group 2(destination) CIPv3-6/7
-        produced_connection_size = 0xFFFF; // Message router maximum amount of data
-        consumed_connection_size = 0xFFFF; // Message router maximum amount of data
+        produced_connection_size = 0xFFFF; // Message router maximum amount of data = 64 bit produced
+        consumed_connection_size = 0xFFFF; // Message router maximum amount of data = 8 bit consumed
         expected_packet_rate = 2500; // Default value (CIPv3-3.30)
         watchdog_timeout_action = 0x01; // auto delete (CIPv3-3.30)
         produced_connection_path_length = 0;
@@ -93,8 +93,8 @@ void CONNECTION::set_state(UCHAR st)
         produced_connection_id = 0x3FF; // MessageGroup1 CIPv3-3.4 CIPv3-2.4
         consumed_connection_id = 0x5FD; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         initial_comm_characteristics = 0x01; // 0 = Produce across message group 1; 1 = Consume across message group 2(destination) CIPv3-6/7
-        produced_connection_size = 3; // i/o poll response length
-        consumed_connection_size = 0; // i/o poll request length
+        produced_connection_size = 8; // i/o poll response length in bytes (64 bits for 64 discrete inputs)
+        consumed_connection_size = 1; // i/o poll request length in bytes (8 bits for 8 discrete outputs)
         expected_packet_rate = 0; // Default value (CIPv3-3.30)
         watchdog_timeout_action = 0x00; // go to timed-out (CIPv3-3.30)
         produced_connection_path_length = 6;
@@ -416,9 +416,10 @@ int CONNECTION::link_consumer(UCHAR request[])
     if (instance == IO_POLL)
     {
         /*******************************************/
-        // The Master should not send me any data in I/O message
-        if (request[LENGTH] == 0) return OK;
+        // In I/O message master must send 8 bits (1 byte) of discrete outputs
+        if (request[LENGTH] == 1) return OK;
         else return NO_RESPONSE;
+
 
     }
     // From this point on we are dealing with an Explicit message
@@ -607,7 +608,7 @@ void CONNECTION::link_producer(UCHAR response[])
         }
         //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
         global_CAN_write[LENGTH] = length;
-        can_id_write = 0x0010;
+        can_id_write = 0b01111111100;
         //pokeb(CAN_BASE, 0x51, 0x66);      					// set transmit request
         write_flag = 1;
     }
@@ -623,9 +624,13 @@ void CONNECTION::link_producer(UCHAR response[])
             for (i=0; i < length; i++)  						// load data into CAN
             {
                 //pokeb(CAN_BASE, (0x67 + i), copy[i]);
+                global_CAN_write[i] = copy[i];
             }
             //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
+            global_CAN_write[LENGTH] = length;
             //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+            can_id_write= 0b10111100011;
+            write_flag=1;
             global_timer[ACK_WAIT] = 20;
 
         }
@@ -783,14 +788,14 @@ class ASSEMBLY
     static UINT class_revision;
     UCHAR data[NUM_IN];
 
-    IDENTITY *identity;
-    DISCRETE_INPUT_POINT *sensor;
+    DISCRETE_INPUT_POINT *inputsas;
+    DISCRETE_OUTPUT_POINT *outputsas;
 
     public:
-    ASSEMBLY(IDENTITY *id, DISCRETE_INPUT_POINT *sensin)
+    ASSEMBLY(DISCRETE_INPUT_POINT *inputsmain, DISCRETE_OUTPUT_POINT *outputmain)
     {
-        identity = id;
-        sensor = sensin;
+        inputsas = inputsmain;
+        outputsas = outputmain;
    }
     static void handle_class_inquiry(UCHAR*, UCHAR*);
     void handle_explicit(UCHAR*, UCHAR*);
@@ -897,11 +902,18 @@ void ASSEMBLY::handle_explicit(UCHAR request[], UCHAR response[])
 // This keeps the values up to date, and ready to send.
 void ASSEMBLY::update_data(void)
 {
+    int count = 0;
+
+    while(count<NUM_IN)
+    {
+        data[count] = inputsas[count]->get_value;
+        count++;
+    }
     // the assembly object keeps local copies of the values it needs to
     // send in the I/O POLL response.  It is faster that way.
-    data[0] = identity->get_state();
-    data[1] = temperature_sensor->get_value();
-    data[2] = humidity_sensor->get_value();
+    //data[0] = identity->get_state();
+    //data[1] = temperature_sensor->get_value();
+    //data[2] = humidity_sensor->get_value();
 }
 
 
@@ -909,8 +921,15 @@ void ASSEMBLY::update_data(void)
 // Handle an I/O Poll request for data
 void ASSEMBLY::handle_io_poll_request(UCHAR request[], UCHAR response[])
 {
+    BOOL val;
     // This is an input assembly so it does not expect to receive data
     // from master. It returns 3 bytes of data to send in the io poll response
+    for (count = 0; count<NUM_OUT; count++)
+    {
+        val = (request[0] & (0b00000001 << (count-1)));
+        ouputsas[count]->set_value(val);
+    }
+
     memset(response, 0, BUFSIZE);
     memcpy(response, data, 3);
     response[LENGTH] = 3;
@@ -920,7 +939,7 @@ void ASSEMBLY::handle_io_poll_request(UCHAR request[], UCHAR response[])
 class DISCRETE_INPUT_POINT
 {
 private:
-    UCHAR value;
+    BOOL value;
     UCHAR instance;
     BOOL status;
     ULONG sensor_clock;
@@ -1036,6 +1055,11 @@ void DISCRETE_INPUT_POINT::handle_explicit(UCHAR request[], UCHAR response[])
 
 UCHAR DISCRETE_INPUT_POINT::get_value(void)
 {
+    int count =0;
+    for(count=0;count<8;count++){
+        digitalWrite(pinin[0], instance & (0x0001 << count));
+    }
+    value = digitalRead(pinin[8]);
     return value;
 }
 
@@ -1044,7 +1068,7 @@ UCHAR DISCRETE_INPUT_POINT::get_value(void)
 class DISCRETE_OUTPUT_POINT
 {
 private:
-    UCHAR value;
+    BOOL value;
     UCHAR instance;
     BOOL status;
     static UINT class_revision;
@@ -1052,6 +1076,7 @@ public:
     static void handle_class_inquiry(UCHAR*, UCHAR*);
     void handle_explicit(UCHAR*, UCHAR*);
     void init_obj(UCHAR);
+    void set_value(BOOL);
 };
 
 void DISCRETE_OUTPUT_POINT::init_obj(UCHAR inst)
@@ -1155,6 +1180,12 @@ void DISCRETE_OUTPUT_POINT::handle_explicit(UCHAR request[], UCHAR response[])
         response[3] = NO_ADDITIONAL_CODE;
         response[LENGTH] = 4;
     }
+}
+
+void DISCRETE_OUTPUT_POINT::set_value(BOOL val)
+{
+    value = val;
+    digitalWrite( pinout[instance], val);
 }
 
 class DEVICENET  // DeviceNet class
@@ -2017,6 +2048,7 @@ class ROUTER
     {
       // Initialize address of other objects
         discretein = in;
+        discreteout = out;
         identity = id;
         devicenet = dn;
         explicito = ex;
@@ -2120,7 +2152,7 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
             {
                 if(intance == i)
                 {
-                    (*discretein[i-1]).handle_class_inquiry(request, response);
+                    discretein[i-1]->handle_class_inquiry(request, response);
                     i=-2;
                 }
                 i++;
@@ -2130,23 +2162,23 @@ void ROUTER::route(UCHAR request[], UCHAR response[])
             error = OBJECT_DOES_NOT_EXIST;
         break;
 
-    case DISCRETE_OUTPUT_POINT_CLASS:
-    if(instance == 0)
-        DISCRETE_OUTPUT_POINT::handle_class_inquiry(request, response);
-    else{
-        while((i != -1)&&( i <= NUM_OUT))
-        {
-            if(intance == i)
+        case DISCRETE_OUTPUT_POINT_CLASS:
+        if(instance == 0)
+            DISCRETE_OUTPUT_POINT::handle_class_inquiry(request, response);
+        else{
+            while((i != -1)&&( i <= NUM_OUT))
             {
-                (*discreteout[i-1]).handle_class_inquiry(request, response);
-                i=-2;
+                if(intance == i)
+                {
+                    discreteout[i-1]->handle_class_inquiry(request, response);
+                    i=-2;
+                }
+                i++;
             }
-            i++;
         }
-    }
-    if(instance>NUM_IN)
-        error = OBJECT_DOES_NOT_EXIST;
-    break;
+        if(instance>NUM_IN)
+            error = OBJECT_DOES_NOT_EXIST;
+        break;
 
         case ASSEMBLY_CLASS:
         switch(instance)
@@ -2281,7 +2313,7 @@ UCHAR CONNECTION::path_in[10] =  {0x20, 0x04, 0x24, 0x01, 0x30, 0x03}; // 0010 0
                                                                     // 00 - 8-bit logical address
                                                                     // 00000011 - Attribute #3 => Data (CIPv1-5-44)
 
-UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 1000 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
+UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 0100 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
                                                                     // 001 - Logical Segment
                                                                     // 000 - Class ID
                                                                     // 00 - 8-bit logical address
@@ -2302,19 +2334,69 @@ int main()
     UCHAR request[BUFSIZE];
     UCHAR response[BUFSIZE];
     DISCRETE_INPUT_POINT *input_point = new DISCRETE_INPUT_POINT[NUM_IN-1];
+    DISCRETE_OUTPUT_POINT *output_point = new DISCRETE_OUTPUT_POINT[NUM_OUT-1];
     CONNECTION expl(EXPLICIT);
     CONNECTION io_poll(IO_POLL);
-    DEVICENET devicenet(MAC_ID, BAUD_RATE, VENDOR_ID, SERIAL_NUM, &expl, &io_poll);
+    DEVICENET devicenet(MAC_ID, BAUD_RATE, VENDOR_ID, SERIAL_ID, &expl, &io_poll);
     IDENTITY identity(VENDOR_ID, SERIAL_NUM, &expl, &io_poll);
+    ROUTER router(&input_point, &output_point, &identity,
+                      &devicenet, &expl, &io_poll, &assembly);
 
     for(UCHAR i=1; i<=NUM_IN; i++)
-        input_point[i-1].init_obj(i); // sensor instance 1 is sensor[0]
-    return 0;
+        input_point[i-1].init_obj(i); // sensor instance 1 is in[0]
+
+    for(UCHAR i=1; i<=NUM_OUT; i++)
+        output_point[i-1].init_obj(i); // sensor instance 1 is out[0]
+
+    std::thread t1(&sock_can_read);
+    std::thread t2(&sock_can_write);
+    std::thread t3(&timer_func);
 
     while(1)
     {
-        e = global_event;
 
+        e = global_event;
+        if ((e & IO_POLL_REQUEST) && !(e & (IO_POLL_REQUEST - 1)))
+        {
+            global_event &= ~IO_POLL_REQUEST; // clear bit
+            // must be online with no critical errors
+            if ((global_status & ON_LINE) && !(global_status & NETWORK_FAULT))
+            {
+                // Get request message from global ISR buffer
+                memcpy(request, global_CAN_buf, BUFSIZE);
+            if (io_poll.link_consumer(request))  	// try to consume the request
+                {
+                    assembly.handle_io_poll_request(request, response);
+                    io_poll.link_producer(response); 	// produce response
+                }
+            }
+        }
+
+
+        // Incoming Explicit request message
+        e = global_event;
+        if ((e & EXPLICIT_REQUEST) && !(e & (EXPLICIT_REQUEST - 1)))
+        {
+            global_event &= ~EXPLICIT_REQUEST; // clear bit
+            // must be online with no critical errors
+            if ((global_status & ON_LINE) && !(global_status & NETWORK_FAULT))
+            {
+                // make sure message is from my master
+                if ((global_CAN_buf[0] & 0x3F) == devicenet.allocation.my_master)
+                {
+                    // Get request message from global ISR buffer
+                    memcpy(request, global_CAN_buf, BUFSIZE);
+                    if (expl.link_consumer(request)) 	// try to consume the request
+                    {
+                        router.route(request, response);  	// route request & get response
+                        expl.link_producer(response);   // produce response
+                    }
+                }
+            }
+        }
+
+
+        e = global_event;
         if ((e & DUP_MAC_REQUEST) && !(e & (DUP_MAC_REQUEST - 1))) // Incoming message from another device
         {
             global_event &= ~DUP_MAC_REQUEST; // Clear bit on global event
@@ -2389,4 +2471,5 @@ int main()
             while (1);
         }
     }
+    return 0;
 }
