@@ -67,8 +67,8 @@ void CONNECTION::set_state(UCHAR st)
         produced_connection_id = 0x5FB; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         consumed_connection_id = 0x5FC; // MessageGroup2 CIPv3-3.4 CIPv3-2.4
         initial_comm_characteristics = 0x21; // 2 = Produce across message group 2(source); 1 = Consume across message group 2(destination) CIPv3-6/7
-        produced_connection_size = 0xFFFF; // Message router maximum amount of data = 64 bit produced
-        consumed_connection_size = 0xFFFF; // Message router maximum amount of data = 8 bit consumed
+        produced_connection_size = 80; // Message router maximum amount of data = 64 bit produced
+        consumed_connection_size = 80; // Message router maximum amount of data = 8 bit consumed
         expected_packet_rate = 2500; // Default value (CIPv3-3.30)
         watchdog_timeout_action = 0x01; // auto delete (CIPv3-3.30)
         produced_connection_path_length = 0;
@@ -683,27 +683,35 @@ void CONNECTION::link_producer(UCHAR response[])
                     global_timer[ACK_WAIT] = 20;				// restart timer for 1 second
                     // Load the first byte of the fragment
                     copy[0] = response[0] | 0x80;
+                    can_id_write= 0b10111100011;
+                    global_CAN_write[0] = copy[0];
                     //pokeb(CAN_BASE, 0x67, copy[0]);
                     if (bytes_left > 6)			// this is a middle fragment
                     {
                         copy[1] = MIDDLE_FRAG | my_xmit_fragment_count;
                         //pokeb(CAN_BASE, 0x68, copy[1]);
+                        global_CAN_write[1] = copy[1];
                         length = 8;
                     }
                     else   							// this is the last fragment
                     {
                         copy[1] = LAST_FRAG | my_xmit_fragment_count;
                         //pokeb(CAN_BASE, 0x68, copy[1]);
+                        global_CAN_write[1] = copy[1];
                         length = bytes_left + 2;
                     }
                     // Put in actual data
                     for (i = 2; i < length; i++)  // put up to 6 more bytes in CAN chip
                     {
                         copy[i] = xmit_fragment_buf[xmit_index];
+                        global_CAN_write[i] = copy[i];
                         //pokeb(CAN_BASE, (0x67 + i), copy[i]);
                         xmit_index++;
                     }
                     copy[LENGTH] = length;
+                    global_CAN_write[LENGTH] = length;
+                    can_id_write= 0b10111100011;
+                    write_flag = 1;
                     //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
                     //pokeb(CAN_BASE, 0x61, 0x66);      // set msg object transmit request
                 }
@@ -717,6 +725,11 @@ void CONNECTION::link_producer(UCHAR response[])
     else if (response[MESSAGE_TAG] == SEND_ACK)
     {
         length = 3;												// This is a 3 byte message
+        global_CAN_write[0] = (response[0] | 0x80);
+        global_CAN_write[1] = (response[1] | ACK_FRAG);
+        global_CAN_write[2] = 0;
+        global_CAN_write[LENGTH] = length;
+        write_flag = 1;
         //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
         //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
         //pokeb(CAN_BASE, 0x69, 0);								// ack status = OK
@@ -731,6 +744,12 @@ void CONNECTION::link_producer(UCHAR response[])
     else if (response[MESSAGE_TAG] == ACK_ERROR)
     {
         length = 3;												// This is a 3 byte message
+        global_CAN_write[0] = (response[0] | 0x80);
+        global_CAN_write[1] = (response[1] | ACK_FRAG);
+        global_CAN_write[2] = 1;
+        global_CAN_write[LENGTH] = length;
+        can_id_write= 0b10111100011;
+        write_flag = 1;
         //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
         //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
         //pokeb(CAN_BASE, 0x69, 1);								// ack status = TOO MUCH DATA
@@ -745,8 +764,12 @@ void CONNECTION::link_producer(UCHAR response[])
         // load explicit response into can chip object #3
         for (i=0; i < length; i++)  						// load data into CAN
         {
+            global_CAN_write[i] = response[i];
             //pokeb(CAN_BASE, (0x67 + i), response[i]);
         }
+        global_CAN_write[LENGTH] = length;
+        can_id_write= 0b10111100011;
+        write_flag = 1;
         //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
         //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
     }
@@ -763,19 +786,25 @@ void CONNECTION::link_producer(UCHAR response[])
         ack_timeout_counter = 0;
         // Load first fragment into can chip object #3
         copy[0] = response[0] | 0x80;
+        global_CAN_write[0] = copy[0];
         //pokeb(CAN_BASE, 0x67, copy[0]);
         xmit_index++;
         // Put in fragment info
         copy[1] = FIRST_FRAG | my_xmit_fragment_count;
+        global_CAN_write[1] = copy[1];
         //pokeb(CAN_BASE, 0x68, copy[1]);
         // Put in actual data
         for (i = 2; i < 8; i++)  // put 6 more bytes in CAN chip
         {
             copy[i] = xmit_fragment_buf[xmit_index];
+            global_CAN_write[i] = copy[i];
             //pokeb(CAN_BASE, (0x67 + i), copy[i]);
             xmit_index++;
         }
         copy[LENGTH] = length;
+        global_CAN_write[LENGTH] =length;
+        can_id_write= 0b10111100011;
+        write_flag=1;
         //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
         //pokeb(CAN_BASE, 0x61, 0x66);      					// set msg object transmit request
         global_timer[ACK_WAIT] = 20;							// start timer to wait for ack
@@ -787,16 +816,18 @@ class ASSEMBLY
     private:
     static UINT class_revision;
     UCHAR data[NUM_IN];
+    UCHAR instance;
 
     DISCRETE_INPUT_POINT *inputsas;
     DISCRETE_OUTPUT_POINT *outputsas;
 
     public:
-    ASSEMBLY(DISCRETE_INPUT_POINT *inputsmain, DISCRETE_OUTPUT_POINT *outputmain)
+    ASSEMBLY(DISCRETE_INPUT_POINT *inputsmain, DISCRETE_OUTPUT_POINT *outputmain, UCHAR ins)
     {
         inputsas = inputsmain;
         outputsas = outputmain;
-   }
+        instance=ins;
+    }
     static void handle_class_inquiry(UCHAR*, UCHAR*);
     void handle_explicit(UCHAR*, UCHAR*);
     void update_data(void);
@@ -926,7 +957,7 @@ void ASSEMBLY::handle_io_poll_request(UCHAR request[], UCHAR response[])
     // from master. It returns 3 bytes of data to send in the io poll response
     for (count = 0; count<NUM_OUT; count++)
     {
-        val = (request[0] & (0b00000001 << (count-1)));
+        val = (request[0] & (0b00000001 << count));
         ouputsas[count]->set_value(val);
     }
 
@@ -2313,7 +2344,7 @@ UCHAR CONNECTION::path_in[10] =  {0x20, 0x04, 0x24, 0x01, 0x30, 0x03}; // 0010 0
                                                                     // 00 - 8-bit logical address
                                                                     // 00000011 - Attribute #3 => Data (CIPv1-5-44)
 
-UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 0100 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
+UCHAR CONNECTION::path_out[10] =  {0x20, 0x04, 0x28, 0x01, 0x30, 0x03}; // 0010 0000 0000 0100 / 0010 1000 0000 0001 / 0011 0000 0000 0011 (Apendix C - CIPv1)
                                                                     // 001 - Logical Segment
                                                                     // 000 - Class ID
                                                                     // 00 - 8-bit logical address
