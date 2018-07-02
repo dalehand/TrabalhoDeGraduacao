@@ -41,6 +41,8 @@ int pinin[9]={30, 21, 22, 23, 24, 25, 27, 28, 29};
 #define COS_CYCLIC 0x04
 #define ACK_WAIT 0x05
 #define UPDATE 0x06
+#define INPUT_ASSEMBLY 0x01
+#define OUTPUT_ASSEMBLY 0x02
 
 // define message tags which can be used to identify message
 #define RECEIVED_ACK 0x01

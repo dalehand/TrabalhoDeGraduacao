@@ -415,9 +415,9 @@ int CONNECTION::link_consumer(UCHAR request[])
     // Handle an I/O Poll request
     if (instance == IO_POLL)
     {
-        /*******************************************/
         // In I/O message master must send 8 bits (1 byte) of discrete outputs
-        if (request[LENGTH] == 1) return OK;
+        if (request[LENGTH] == 1) return OUTPUT_ASSEMBLY;
+        else if (request[LENGTH] == 0) return INPUT_ASSEMBLY;
         else return NO_RESPONSE;
 
 
@@ -603,13 +603,10 @@ void CONNECTION::link_producer(UCHAR response[])
         // load io poll response into can chip object #9
         for (i=0; i < length; i++)  						// load CAN data
         {
-            //pokeb(CAN_BASE, (0x57 + i), response[i]);
             global_CAN_write[i] = response[i];
-        }
-        //pokeb(CAN_BASE, 0x56, ((length << 4) | 0x08));	// load config register
+        }	// load config register
         global_CAN_write[LENGTH] = length;
-        can_id_write = 0b01111111100;
-        //pokeb(CAN_BASE, 0x51, 0x66);      					// set transmit request
+        can_id_write = 0b01111111100;      					// set transmit request
         write_flag = 1;
     }
 
@@ -623,12 +620,10 @@ void CONNECTION::link_producer(UCHAR response[])
             length = copy[LENGTH];
             for (i=0; i < length; i++)  						// load data into CAN
             {
-                //pokeb(CAN_BASE, (0x67 + i), copy[i]);
                 global_CAN_write[i] = copy[i];
             }
-            //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-            global_CAN_write[LENGTH] = length;
-            //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+            // load config resister
+            global_CAN_write[LENGTH] = length;      					// set transmit request
             can_id_write= 0b10111100011;
             write_flag=1;
             global_timer[ACK_WAIT] = 20;
@@ -685,18 +680,15 @@ void CONNECTION::link_producer(UCHAR response[])
                     copy[0] = response[0] | 0x80;
                     can_id_write= 0b10111100011;
                     global_CAN_write[0] = copy[0];
-                    //pokeb(CAN_BASE, 0x67, copy[0]);
                     if (bytes_left > 6)			// this is a middle fragment
                     {
                         copy[1] = MIDDLE_FRAG | my_xmit_fragment_count;
-                        //pokeb(CAN_BASE, 0x68, copy[1]);
                         global_CAN_write[1] = copy[1];
                         length = 8;
                     }
                     else   							// this is the last fragment
                     {
                         copy[1] = LAST_FRAG | my_xmit_fragment_count;
-                        //pokeb(CAN_BASE, 0x68, copy[1]);
                         global_CAN_write[1] = copy[1];
                         length = bytes_left + 2;
                     }
@@ -705,15 +697,12 @@ void CONNECTION::link_producer(UCHAR response[])
                     {
                         copy[i] = xmit_fragment_buf[xmit_index];
                         global_CAN_write[i] = copy[i];
-                        //pokeb(CAN_BASE, (0x67 + i), copy[i]);
                         xmit_index++;
                     }
                     copy[LENGTH] = length;
                     global_CAN_write[LENGTH] = length;
                     can_id_write= 0b10111100011;
                     write_flag = 1;
-                    //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-                    //pokeb(CAN_BASE, 0x61, 0x66);      // set msg object transmit request
                 }
             }
         }
@@ -730,11 +719,6 @@ void CONNECTION::link_producer(UCHAR response[])
         global_CAN_write[2] = 0;
         global_CAN_write[LENGTH] = length;
         write_flag = 1;
-        //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
-        //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
-        //pokeb(CAN_BASE, 0x69, 0);								// ack status = OK
-        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
     }
 
 
@@ -750,11 +734,6 @@ void CONNECTION::link_producer(UCHAR response[])
         global_CAN_write[LENGTH] = length;
         can_id_write= 0b10111100011;
         write_flag = 1;
-        //pokeb(CAN_BASE, 0x67, (response[0] | 0x80));
-        //pokeb(CAN_BASE, 0x68, (response[1] | ACK_FRAG));
-        //pokeb(CAN_BASE, 0x69, 1);								// ack status = TOO MUCH DATA
-        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
     }
 
 
@@ -765,13 +744,10 @@ void CONNECTION::link_producer(UCHAR response[])
         for (i=0; i < length; i++)  						// load data into CAN
         {
             global_CAN_write[i] = response[i];
-            //pokeb(CAN_BASE, (0x67 + i), response[i]);
         }
         global_CAN_write[LENGTH] = length;
-        can_id_write= 0b10111100011;
-        write_flag = 1;
-        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-        //pokeb(CAN_BASE, 0x61, 0x66);      					// set transmit request
+        can_id_write= 0b10111100011; // load config resister
+        write_flag = 1; // set transmit request
     }
 
 
@@ -787,26 +763,21 @@ void CONNECTION::link_producer(UCHAR response[])
         // Load first fragment into can chip object #3
         copy[0] = response[0] | 0x80;
         global_CAN_write[0] = copy[0];
-        //pokeb(CAN_BASE, 0x67, copy[0]);
         xmit_index++;
         // Put in fragment info
         copy[1] = FIRST_FRAG | my_xmit_fragment_count;
         global_CAN_write[1] = copy[1];
-        //pokeb(CAN_BASE, 0x68, copy[1]);
         // Put in actual data
         for (i = 2; i < 8; i++)  // put 6 more bytes in CAN chip
         {
             copy[i] = xmit_fragment_buf[xmit_index];
             global_CAN_write[i] = copy[i];
-            //pokeb(CAN_BASE, (0x67 + i), copy[i]);
             xmit_index++;
         }
         copy[LENGTH] = length;
         global_CAN_write[LENGTH] =length;
-        can_id_write= 0b10111100011;
-        write_flag=1;
-        //pokeb(CAN_BASE, 0x66, ((length << 4) | 0x08));	// load config resister
-        //pokeb(CAN_BASE, 0x61, 0x66);      					// set msg object transmit request
+        can_id_write= 0b10111100011; // load config resister
+        write_flag=1; // set msg object transmit request
         global_timer[ACK_WAIT] = 20;							// start timer to wait for ack
     }
 }
@@ -1966,94 +1937,6 @@ void IDENTITY::update_device(void)
         }
     }
 
-/*    if (device_clock >= 8) // self-test done, update status and module LED
-    {
-        // Copy the global status into the identity object status attribute
-        status = global_status & 0x0F05;  				// zero out some bits
-        if (global_status & DEVICE_FAULT)
-        {
-            // module LED red
-            state = 5;		// indicate device fault
-            //temp = peekb(PIO_BASE, PORTC);
-            temp &= 0xD0;		// red on
-            temp |= 0x10;		// grn off
-            //pokeb(PIO_BASE, PORTC, temp);
-        }
-        else if (global_status & OPERATIONAL)
-        {
-            // module LED green
-            state = 3;			// indicate device is operational
-            //temp = peekb(PIO_BASE, PORTC);
-            temp &= 0xE0;		// grn on
-            temp |= 0x20;		// red off
-            //pokeb(PIO_BASE, PORTC, temp);
-        }
-
-        // Next, handle network bicolor LED
-        // Check state of connections
-        explicit_conxn_state = explicitcon->get_state();
-        io_poll_conxn_state = io_poll->get_state();
-
-        if (global_status & NETWORK_FAULT)
-        {
-            // network LED steady red
-            //temp = peekb(PIO_BASE, PORTC);
-            temp &= 0x70;		// red on
-            temp |= 0x40;		// grn off
-
-            //pokeb(PIO_BASE, PORTC, temp);
-        }
-        else if ((global_status & ON_LINE) == 0)
-        {
-            // network LED off
-            //temp = peekb(PIO_BASE, PORTC);
-            temp |= 0xC0;		// both off
-            //pokeb(PIO_BASE, PORTC, temp);
-        }
-        else if (io_poll_conxn_state == TIMED_OUT)
-        {
-            // network LED flashing red
-            //temp = peekb(PIO_BASE, PORTC);
-            if (((device_clock / 2) % 2) == 0)
-            {
-                temp &= 0x70;		// red on
-                temp |= 0x40;		// grn off
-                //pokeb(PIO_BASE, PORTC, temp);
-            }
-            else
-            {
-                temp |= 0xC0;		// both off
-                //pokeb(PIO_BASE, PORTC, temp);
-            }
-        }
-        else if ((io_poll_conxn_state != ESTABLISHED) &&
-                    (explicit_conxn_state != ESTABLISHED))
-        {
-            // network LED flashing green
-            //temp = peekb(PIO_BASE, PORTC);
-            if (((device_clock / 2) % 2) == 0)
-            {
-                temp &= 0xB0;		// grn on
-                temp |= 0x80;		// red off
-                //pokeb(PIO_BASE, PORTC, temp);
-            }
-            else
-            {
-                temp |= 0xC0;		// both on
-                //pokeb(PIO_BASE, PORTC, temp);
-            }
-        }
-        else if ((io_poll_conxn_state == ESTABLISHED) ||
-                    (explicit_conxn_state == ESTABLISHED))
-        {
-            // at least one connection is established
-            // network LED steady green
-            //temp = peekb(PIO_BASE, PORTC);
-            temp &= 0xB0;		// grn on
-            temp |= 0x80;		// red off
-            //pokeb(PIO_BASE, PORTC, temp);
-        }
-    }*/
     device_clock++;
 }
 
