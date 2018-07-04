@@ -1,0 +1,109 @@
+@book{cip1,
+ author = {ODVA},
+ title = {THE CIP NETWORKS LIBRARY, Volume 1, Common Industrial Protocol},
+ year = {2007},
+ publisher = {ODVA and ControlNet International Ltd.},
+}
+@book{cip3,
+ author = {ODVA},
+ title = {THE CIP NETWORKS LIBRARY, Volume 3, DeviceNet Adaption of CIP},
+ year = {2007},
+ publisher = {ODVA and ControlNet International Ltd.},
+}
+
+@book{book:931403,
+   title =     {Practical Raspberry Pi},
+   author =    {Brendan Horan},
+   publisher = {Apress},
+   isbn =      {1430249714,9781430249719},
+   year =      {2013},
+   series =    {},
+   edition =   {1},
+   volume =    {},
+ }
+
+@book{book:673868,
+   title =     {The Industrial Communication Technology Handbook (Industrial Information Technology)},
+   author =    {Richard Zurawski},
+   publisher = {CRC Press},
+   isbn =      {0849330777,9780849330773},
+   year =      {2005},
+   series =    {},
+   edition =   {1},
+   volume =    {},
+}
+
+@book{jb1,
+ author = {Jim Brady},
+ title = {Networking with DeviceNet},
+ year = {1998},
+ publisher = {The Computer Applications Journal},
+}
+
+@book{jb2,
+ author = {Jim Brady},
+ title = {Wheater Station Application},
+ year = {1998},
+ publisher = {The Computer Applications Journal},
+}
+
+
+@book{tgivan,
+  author = {Luiz Henrique do Espírito Santo Andrade and Ivan Vilela Alencastro Veiga},
+  title = {PROJETO E IMPLEMENTAÇÃO DE UMA MAQUETE PARA ESTUDO DE PROBLEMAS RELACIONADOS À AUTOMAÇÃO DE SISTEMAS DE TRANSPORTE FERROVIÁRIO},
+ publisher = {Universidade de Brasília},
+}
+
+@book{tgtiago,
+  author = {Tiago Romeiro de Jesus and José Adriany Victor de Aquino},
+  title = {ESTRATÉGIA DE CONTROLE DE TRÁFEGO EM VIAS FÉRREAS SINGELAS, UTILIZANDO PROGRAMAÇÃO SFC SOBRE ARQUITETURA DE CONTROLADORES INDUSTRIAIS PROGRAMÁVEIS},
+ publisher = {Universidade de Brasília},
+}
+
+@misc{RaspGPIO,
+  title = {GPIO: RASPBERRY PI MODELS A AND B},
+  howpublished = {\url{https://www.raspberrypi.org/documentation/usage/gpio/}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@misc{RaspEsp,
+  title = {Raspberry Pi 3 Model B Specs},
+  howpublished = {\url{https://www.raspberrypi.org/products/raspberry-pi-3-model-b/}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@misc{mcp2515,
+  title = {Datasheet MCP2515},
+  howpublished = {\url{http://ww1.microchip.com/downloads/en/DeviceDoc/21801d.pdf}},
+ publisher = {Microchip}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@misc{mcp2551,
+  title = {Datasheet MCP2551},
+  howpublished = {\url{http://ww1.microchip.com/downloads/en/DeviceDoc/21667E.pdf}},
+ publisher = {Microchip}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@misc{wpie,
+  title = {Wiring Pi},
+  howpublished = {\url{ http://wiringpi.com/}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@misc{socketcan,
+  title = {SocketCAN Documentation},
+  howpublished = {\url{https://www.kernel.org/doc/Documentation/networking/can.txt}},
+  note = {Acessado em: 04/04/2018}
+}
+
+@article{article:dummy,
+author = {John Smith and Mary Williams},
+journal = {Journal of Publications},
+month = Jan,
+pages = {0-0},
+title = {A Dummy Citation Entry},
+volume = {0},
+year = {0000}
+}
